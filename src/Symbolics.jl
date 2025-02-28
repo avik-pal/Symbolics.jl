@@ -5,37 +5,50 @@ module Symbolics
 
 using PrecompileTools
 
+import PrecompileTools: @recompile_invalidations
+
 @recompile_invalidations begin
-
-    using DocStringExtensions, Markdown
-
-    using LinearAlgebra
-
-    using Reexport
-
-    using DomainSets
-
-    using Setfield
-
-    import DomainSets: Domain
-    
-    import SymbolicUtils: similarterm, istree, operation, arguments, symtype, metadata
-    
-    import SymbolicUtils: Term, Add, Mul, Pow, Sym, Div, BasicSymbolic,
-    FnType, @rule, Rewriters, substitute,
-    promote_symtype, isadd, ismul, ispow, isterm, issym, isdiv
-    
-    using SymbolicUtils.Code
-    
-    import SymbolicUtils.Rewriters: Chain, Prewalk, Postwalk, Fixpoint
-    
-    import SymbolicUtils.Code: toexpr
-    
-    import ArrayInterface
-    using RuntimeGeneratedFunctions
-    using SciMLBase, IfElse
-    using MacroTools
+    import CommonWorldInvalidations
 end
+
+using DocStringExtensions, Markdown
+
+using LinearAlgebra
+
+using Primes
+
+using Reexport
+
+using Setfield
+
+import DomainSets: Domain, DomainSets
+
+using TermInterface
+import TermInterface: maketerm, iscall, operation, arguments, metadata
+
+import SymbolicUtils: Term, Add, Mul, Pow, Sym, Div, BasicSymbolic,
+FnType, @rule, Rewriters, substitute, symtype,
+promote_symtype, isadd, ismul, ispow, isterm, issym, isdiv
+
+using SymbolicUtils.Code
+
+import SymbolicUtils.Rewriters: Chain, Prewalk, Postwalk, Fixpoint
+
+import SymbolicUtils.Code: toexpr
+
+import ArrayInterface
+using RuntimeGeneratedFunctions
+using SciMLBase
+import MacroTools
+
+using SymbolicIndexingInterface
+
+import SymbolicLimits
+
+using ADTypes: ADTypes
+
+import OffsetArrays
+
 @reexport using SymbolicUtils
 RuntimeGeneratedFunctions.init(@__MODULE__)
 
@@ -48,14 +61,17 @@ import MacroTools: splitdef, combinedef, postwalk, striplines
 include("wrapper-types.jl")
 
 include("num.jl")
+
+include("rewrite-helpers.jl")
 include("complex.jl")
 
 """
-    substitute(expr, s)
+    substitute(expr, s; fold=true)
 
 Performs the substitution on `expr` according to rule(s) `s`.
+If `fold=false`, expressions which can be evaluated won't be evaluated.
 # Examples
-```julia
+```jldoctest
 julia> @variables t x y z(t)
 4-element Vector{Num}:
     t
@@ -66,6 +82,8 @@ julia> ex = x + y + sin(z)
 (x + y) + sin(z(t))
 julia> substitute(ex, Dict([x => z, sin(z) => z^2]))
 (z(t) + y) + (z(t) ^ 2)
+julia> substitute(sqrt(2x), Dict([x => 1]); fold=false)
+sqrt(2)
 ```
 """
 substitute
@@ -76,27 +94,33 @@ include("equations.jl")
 export Inequality, ≲, ≳
 include("inequality.jl")
 
+import Bijections, DynamicPolynomials
+export tosymbol, terms, factors
 include("utils.jl")
 
 using ConstructionBase
 include("arrays.jl")
 
-export @register, @register_symbolic
+export @register_symbolic, @register_array_symbolic
 include("register.jl")
 
-using TreeViews
 export @variables, Variable
 include("variable.jl")
 
+function slog end; function ssqrt end; function scbrt end
 include("linearity.jl")
 
 using DiffRules, SpecialFunctions, NaNMath
 
 using SparseArrays
 
-export Differential, expand_derivatives
+export Differential, expand_derivatives, is_derivative
 
 include("diff.jl")
+
+export SymbolicsSparsityDetector
+
+include("adtypes.jl")
 
 export Difference, DiscreteUpdate
 
@@ -110,11 +134,17 @@ include("integral.jl")
 
 include("array-lib.jl")
 
-include("linear_algebra.jl")
+using LogExpFunctions
+include("logexpfunctions-lib.jl")
 
-using Groebner
+include("linear_algebra.jl")
+export symbolic_linear_solve, solve_for
+
 include("groebner_basis.jl")
-export groebner_basis
+export groebner_basis, is_groebner_basis
+
+include("taylor.jl")
+export series, taylor, taylor_coeff
 
 import Libdl
 include("build_function.jl")
@@ -132,13 +162,16 @@ include("plot_recipes.jl")
 
 include("semipoly.jl")
 
-include("solver.jl")
-export solve_single_eq
-export solve_system_eq
-export lambertw
 
 include("parsing.jl")
 export parse_expr_to_symbolic
+
+include("error_hints.jl")
+include("struct.jl")
+include("operators.jl")
+
+include("limits.jl")
+export limit
 
 # Hacks to make wrappers "nicer"
 const NumberTypes = Union{AbstractFloat,Integer,Complex{<:AbstractFloat},Complex{<:Integer}}
@@ -167,19 +200,50 @@ for T in [Num, Complex{Num}]
     end
 end
 
+for sType in [Pair, Vector, Dict]
+    @eval substitute(expr::Arr, s::$sType; kw...) = wrap(substituter(s)(unwrap(expr); kw...))
+end
+
+# Symbolic solver
+include("solver/preprocess.jl")
+include("solver/nemo_stuff.jl")
+include("solver/solve_helpers.jl")
+include("solver/postprocess.jl")
+include("solver/univar.jl")
+include("solver/ia_helpers.jl")
+include("solver/polynomialization.jl")
+include("solver/attract.jl")
+include("solver/ia_main.jl")
+include("solver/main.jl")
+include("solver/special_cases.jl")
+export symbolic_solve
+
 function symbolics_to_sympy end
 export symbolics_to_sympy
 
-@static if !isdefined(Base, :get_extension)
-    using Requires
-end
-
-@static if !isdefined(Base,:get_extension)
-    function __init__()
-        @require SymPy="24249f21-da20-56a4-8eb1-6a02cf4ae2e6" begin
-            include("../ext/SymbolicsSymPyExt.jl")
+function __init__()
+    Base.Experimental.register_error_hint(TypeError) do io, exc
+        if exc.expected == Bool && exc.got isa Num
+            println(io,
+                "\nA symbolic expression appeared in a Boolean context. This error arises in situations where Julia expects a Bool, like ")
+            printstyled(io, "if boolean_condition", color = :blue)
+            printstyled(
+                io, "\t\t use ifelse(boolean_condition, then branch, else branch)\n",
+                color = :green)
+            printstyled(io, "x && y", color = :blue)
+            printstyled(io, "\t\t\t\t use x & y\n", color = :green)
+            printstyled(io, "boolean_condition ? a : b", color = :blue)
+            printstyled(io, "\t use ifelse(boolean_condition, a, b)\n", color = :green)
+            print(io,
+                "but a symbolic expression appeared instead of a Bool. For help regarding control flow with symbolic variables, see https://docs.sciml.ai/ModelingToolkit/dev/basics/FAQ/#How-do-I-handle-if-statements-in-my-symbolic-forms?")
         end
     end
 end
+
+export inverse, left_inverse, right_inverse, @register_inverse, has_inverse, has_left_inverse, has_right_inverse
+include("inverse.jl")
+
+export rootfunction, left_continuous_function, right_continuous_function, @register_discontinuity
+include("discontinuities.jl")
 
 end # module

@@ -3,7 +3,7 @@ prettify_expr(f::Function) = nameof(f)
 prettify_expr(expr::Expr) = Expr(expr.head, prettify_expr.(expr.args)...)
 
 function cleanup_exprs(ex)
-    return postwalk(x -> istree(x) && length(arguments(x)) == 0 ? operation(x) : x, ex)
+    return postwalk(x -> iscall(x) && length(arguments(x)) == 0 ? operation(x) : x, ex)
 end
 
 function latexify_derivatives(ex)
@@ -37,7 +37,7 @@ function latexify_derivatives(ex)
                 integrand
             )
         elseif x.args[1] === :_textbf
-            ls = latexify(latexify_derivatives(arguments(x)[1])).s
+            ls = latexify(latexify_derivatives(sorted_arguments(x)[1])).s
             return "\\textbf{" * strip(ls, '\$') * "}"
         else
             return x
@@ -51,6 +51,9 @@ recipe(n) = latexify_derivatives(cleanup_exprs(_toexpr(n)))
     env --> :equation
     cdot --> false
     fmt --> FancyNumberFormatter(5)
+    index --> :subscript
+    snakecase --> true
+    safescripts --> true
 
     return recipe(n)
 end
@@ -58,7 +61,8 @@ end
 @latexrecipe function f(z::Complex{Num})
     env --> :equation
     cdot --> false
-    
+    index --> :subscript
+
     iszero(z.im) && return :($(recipe(z.re)))
     iszero(z.re) && return :($(recipe(z.im)) * $im)
     return :($(recipe(z.re)) + $(recipe(z.im)) * $im)
@@ -67,12 +71,14 @@ end
 @latexrecipe function f(n::ArrayOp)
     env --> :equation
     cdot --> false
+    index --> :subscript
     return recipe(n.term)
 end
 
 @latexrecipe function f(n::Function)
     env --> :equation
     cdot --> false
+    index --> :subscript
 
     return nameof(n)
 end
@@ -81,6 +87,7 @@ end
 @latexrecipe function f(n::Arr)
     env --> :equation
     cdot --> false
+    index --> :subscript
 
     return unwrap(n)
 end
@@ -88,11 +95,13 @@ end
 @latexrecipe function f(n::Symbolic)
     env --> :equation
     cdot --> false
+    index --> :subscript
 
     return recipe(n)
 end
 
 @latexrecipe function f(eqs::Vector{Equation})
+    index --> :subscript
     has_connections = any(x->x.lhs isa Connection, eqs)
     if has_connections
         env --> :equation
@@ -105,6 +114,7 @@ end
 
 @latexrecipe function f(eq::Equation)
     env --> :equation
+    index --> :subscript
 
     if eq.lhs isa Connection
         return eq.rhs
@@ -114,6 +124,7 @@ end
 end
 
 @latexrecipe function f(c::Connection)
+    index --> :subscript
     return Expr(:call, :connect, map(nameof, c.systems)...)
 end
 
@@ -134,7 +145,7 @@ function _toexpr(O)
 
         # We need to iterate over each term in m, ignoring the numeric coefficient.
         # This iteration needs to be stable, so we can't iterate over m.dict.
-        for term in Iterators.drop(arguments(m), isone(m.coeff) ? 0 : 1)
+        for term in Iterators.drop(sorted_arguments(m), isone(m.coeff) ? 0 : 1)
             if !ispow(term)
                 push!(numer, _toexpr(term))
                 continue
@@ -142,7 +153,7 @@ function _toexpr(O)
 
             base = term.base
             pow  = term.exp
-            isneg = (pow isa Number && pow < 0) || (istree(pow) && operation(pow) === (-) && length(arguments(pow)) == 1)
+            isneg = (pow isa Number && pow < 0) || (iscall(pow) && operation(pow) === (-) && length(arguments(pow)) == 1)
             if !isneg
                 if _isone(pow)
                     pushfirst!(numer, _toexpr(base))
@@ -159,7 +170,9 @@ function _toexpr(O)
             end
         end
 
-        if isempty(numer) || !isone(abs(m.coeff))
+        if !isreal(m.coeff)
+            numer_expr = Expr(:call, :*, m.coeff, numer...)
+        elseif isempty(numer) || !isone(abs(m.coeff))
             numer_expr = Expr(:call, :*, abs(m.coeff), numer...)
         else
             numer_expr = length(numer) > 1 ? Expr(:call, :*, numer...) : numer[1]
@@ -172,17 +185,24 @@ function _toexpr(O)
             frac_expr = Expr(:call, :/, numer_expr, denom_expr)
         end
 
-        if m.coeff < 0
+        if isreal(m.coeff) && real(m.coeff) < 0
             return Expr(:call, :-, frac_expr)
         else
             return frac_expr
         end
     end
-    issym(O) && return nameof(O)
-    !istree(O) && return O
+    if issym(O) 
+        sym = string(nameof(O))
+        sym = replace(sym, NAMESPACE_SEPARATOR => ".")
+        if length(sym) > 1
+            sym = string("\\mathtt{", sym, "}")
+        end
+        return Symbol(sym)
+    end
+    !iscall(O) && return O
 
     op = operation(O)
-    args = arguments(O)
+    args = sorted_arguments(O)
 
     if (op===(*)) && (args[1] === -1)
         arg_mul = Expr(:call, :(*), _toexpr(args[2:end])...)
@@ -219,6 +239,8 @@ function _toexpr(O)
         return :(solve($(_toexpr(args[1])), $(_toexpr(args[2]))))
     elseif issym(op) && symtype(op) <: AbstractArray
         return :(_textbf($(nameof(op))))
+    elseif op === identity
+        return _toexpr(only(args)) # suppress identity transformations (e.g. "identity(π)" -> "π")
     end
     return Expr(:call, Symbol(op), _toexpr(args)...)
 end
@@ -233,15 +255,10 @@ _toexpr(eqs::AbstractArray) = map(eq->_toexpr(eq), eqs)
 _toexpr(x::Num) = _toexpr(value(x))
 
 function getindex_to_symbol(t)
-    @assert istree(t) && operation(t) === getindex && symtype(arguments(t)[1]) <: AbstractArray
-    args = arguments(t)
+    @assert iscall(t) && operation(t) === getindex && symtype(sorted_arguments(t)[1]) <: AbstractArray
+    args = sorted_arguments(t)
     idxs = args[2:end]
-    try
-        sub = join(map(map_subscripts, idxs), "ˏ")
-        return Symbol(_toexpr(args[1]), sub)
-    catch
-        return :($(_toexpr(args[1]))[$(idxs...)])
-    end
+    return :($(_toexpr(args[1]))[$(idxs...)])
 end
 
 function diffdenom(e)
@@ -258,4 +275,3 @@ function diffdenom(e)
         e
     end
 end
-

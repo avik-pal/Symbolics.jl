@@ -34,17 +34,13 @@ function throw_missing_specialization(n)
 end
 
 """
-`build_function`
+    build_function(ex, args...;
+                   expression = Val{true},
+                   target = JuliaTarget(),
+                   parallel=nothing,
+                   kwargs...)
 
 Generates a numerically-usable function from a Symbolics `Num`.
-
-```julia
-build_function(ex, args...;
-               expression = Val{true},
-               target = JuliaTarget(),
-               parallel=nothing,
-               kwargs...)
-```
 
 Arguments:
 
@@ -108,7 +104,11 @@ function _build_function(target::JuliaTarget, op, args...;
                          states = LazyState(),
                          linenumbers = true,
                          wrap_code = nothing,
-                         cse = false, kwargs...)
+                         cse = false,
+                         nanmath = true,
+                         kwargs...)
+
+  states.rewrites[:nanmath] = nanmath
   dargs = map((x) -> destructure_arg(x[2], !checkbounds, Symbol("ˍ₋arg$(x[1])")), enumerate([args...]))
     expr = if cse
         fun = Func(dargs, [], Code.cse(unwrap(op)))
@@ -119,7 +119,10 @@ function _build_function(target::JuliaTarget, op, args...;
         (wrap_code !== nothing) && (fun = wrap_code(fun))
         conv(fun, states)
     end
-
+    if !checkbounds
+        @assert Meta.isexpr(expr, :function)
+        expr.args[2] = :(@inbounds begin; $(expr.args[2]); end)
+    end
     if expression == Val{true}
         expr
     else
@@ -129,18 +132,22 @@ end
 
 SymbolicUtils.Code.get_rewrites(x::Arr) = SymbolicUtils.Code.get_rewrites(unwrap(x))
 
-function _build_function(target::JuliaTarget, op::Union{Arr, ArrayOp}, args...;
+function _build_function(target::JuliaTarget, op::Union{Arr, ArrayOp, SymbolicUtils.BasicSymbolic{<:AbstractArray}}, args...;
                          conv = toexpr,
                          expression = Val{true},
                          expression_module = @__MODULE__(),
                          checkbounds = false,
                          states = LazyState(),
                          linenumbers = true,
-                         cse = false, kwargs...)
+                         cse = false,
+                         nanmath = true,
+                         wrap_code = (identity, identity),
+                         kwargs...)
 
     dargs = map((x) -> destructure_arg(x[2], !checkbounds,
                                   Symbol("ˍ₋arg$(x[1])")), enumerate([args...]))
 
+    states.rewrites[:nanmath] = nanmath
     expr = if cse
         conv(Func(dargs, [], Code.cse(unwrap(op))), states)
     else
@@ -149,11 +156,11 @@ function _build_function(target::JuliaTarget, op::Union{Arr, ArrayOp}, args...;
 
     outsym = Symbol("ˍ₋out")
     body = inplace_expr(unwrap(op), outsym)
-    oop_expr = conv(Func([outsym, dargs...], [], body), states)
+    iip_expr = conv(wrap_code[2](Func([outsym, dargs...], [], body)), states)
 
     N = length(shape(op))
     op = unwrap(op)
-    if op isa ArrayOp && istree(op.term)
+    if op isa ArrayOp && iscall(op.term)
         op_body = op.term
     else
         op_body = :(let $outsym = zeros(Float64, map(length, ($(shape(op)...),)))
@@ -161,12 +168,18 @@ function _build_function(target::JuliaTarget, op::Union{Arr, ArrayOp}, args...;
               $outsym
           end) |> LiteralExpr
     end
-    ip_expr = conv(Func(dargs, [], op_body), states)
+    oop_expr = conv(wrap_code[1](Func(dargs, [], op_body)), states)
+    if !checkbounds
+        @assert Meta.isexpr(oop_expr, :function)
+        oop_expr.args[2] = :(@inbounds begin; $(oop_expr.args[2]); end)
+        @assert Meta.isexpr(iip_expr, :function)
+        iip_expr.args[2] = :(@inbounds begin; $(iip_expr.args[2]); end)
+    end
     if expression == Val{true}
-        oop_expr, ip_expr
+        oop_expr, iip_expr
     else
         _build_and_inject_function(expression_module, oop_expr),
-        _build_and_inject_function(expression_module, ip_expr)
+        _build_and_inject_function(expression_module, iip_expr)
     end
 end
 
@@ -213,16 +226,16 @@ end
 Build function target: `JuliaTarget`
 
 ```julia
-function _build_function(target::JuliaTarget, rhss, args...;
-                         conv = toexpr, 
-                         expression = Val{true},
-                         checkbounds = false,
-                         linenumbers = false,
-                         headerfun = addheader, outputidxs=nothing,
-                         convert_oop = true, force_SA = false,
-                         skipzeros = outputidxs===nothing,
-                         fillzeros = skipzeros && !(typeof(rhss)<:SparseMatrixCSC),
-                         parallel=SerialForm(), kwargs...)
+_build_function(target::JuliaTarget, rhss, args...;
+                conv = toexpr,
+                expression = Val{true},
+                checkbounds = false,
+                linenumbers = false,
+                headerfun = addheader, outputidxs=nothing,
+                convert_oop = true, force_SA = false,
+                skipzeros = outputidxs===nothing,
+                fillzeros = skipzeros && !(typeof(rhss)<:SparseMatrixCSC),
+                parallel=SerialForm(), kwargs...)
 ```
 
 Generates a Julia function which can then be utilized for further evaluations.
@@ -261,6 +274,8 @@ Special Keyword Arguments:
 - `force_SA`: Forces the output of the OOP version to be a StaticArray.
   Defaults to `false`, and outputs a static array when the first argument
   is a static array.
+- `similarto`: An `AbstractArray` subtype which controls the type of the
+  returned array for the OOP version. If provided, it ignores the value of `force_SA`.
 - `skipzeros`: Whether to skip filling zeros in the in-place version if the
   filling function is 0.
 - `fillzeros`: Whether to perform `fill(out,0)` before the calculations to ensure
@@ -276,18 +291,23 @@ function _build_function(target::JuliaTarget, rhss::AbstractArray, args...;
                        outputidxs=nothing,
                        skipzeros = false,
                        force_SA = false,
+                       similarto = nothing,
                        wrap_code = (nothing, nothing),
                        fillzeros = skipzeros && !(rhss isa SparseMatrixCSC),
                        states = LazyState(),
                        iip_config = (true, true),
+                       nanmath = true,
                        parallel=nothing, cse = false, kwargs...)
 
+    states.rewrites[:nanmath] = nanmath
     # We cannot switch to ShardedForm because it deadlocks with
     # RuntimeGeneratedFunctions
     dargs = map((x) -> destructure_arg(x[2], !checkbounds,
                                   Symbol("ˍ₋arg$(x[1])")), enumerate([args...]))
     i = findfirst(x->x isa DestructuredArgs, dargs)
-    similarto = force_SA ? SArray : i === nothing ? Array : dargs[i].name
+    if similarto === nothing
+        similarto = force_SA ? SArray : i === nothing ? Array : dargs[i].name
+    end
 
     oop, iip = iip_config
     oop_body = if oop
@@ -320,11 +340,18 @@ function _build_function(target::JuliaTarget, rhss::AbstractArray, args...;
         ip_expr = wrap_code[2](ip_expr)
     end
 
+    oop_expr, ip_expr = conv(oop_expr, states), conv(ip_expr, states)
+    if !checkbounds
+        @assert Meta.isexpr(oop_expr, :function)
+        oop_expr.args[2] = :(@inbounds begin; $(oop_expr.args[2]); end)
+        @assert Meta.isexpr(ip_expr, :function)
+        ip_expr.args[2] = :(@inbounds begin; $(ip_expr.args[2]); end)
+    end
     if expression == Val{true}
-        return conv(oop_expr, states), conv(ip_expr, states)
+        return oop_expr, ip_expr
     else
-        return _build_and_inject_function(expression_module, conv(oop_expr, states)),
-        _build_and_inject_function(expression_module, conv(ip_expr, states))
+        return _build_and_inject_function(expression_module, oop_expr),
+        _build_and_inject_function(expression_module, ip_expr)
     end
 end
 
@@ -575,19 +602,19 @@ function numbered_expr(O::Symbolic,varnumbercache,args...;varordering = args[1],
                        states = LazyState(),
                        lhsname=:du,rhsnames=[Symbol("MTK$i") for i in 1:length(args)])
     O = value(O)
-    if (issym(O) || issym(operation(O))) || (istree(O) && operation(O) == getindex)
+    if (issym(O) || issym(operation(O))) || (iscall(O) && operation(O) == getindex)
         (j,i) = get(varnumbercache, O, (nothing, nothing))
         if !isnothing(j)
             return i==0 ? :($(rhsnames[j])) : :($(rhsnames[j])[$(i+offset)])
         end
     end
-    if istree(O)
+    if iscall(O)
         if operation(O) === getindex
             args = arguments(O)
             Expr(:ref, toexpr(args[1], states), toexpr.(args[2:end] .+ offset, (states,))...)
         else
             Expr(:call, Symbol(operation(O)), (numbered_expr(x,varnumbercache,args...;offset=offset,lhsname=lhsname,
-                                                             rhsnames=rhsnames,varordering=varordering) for x in arguments(O))...)
+                                                             rhsnames=rhsnames,varordering=varordering) for x in sorted_arguments(O))...)
         end
     elseif issym(O)
         tosymbol(O, escape=false)
@@ -667,11 +694,11 @@ end
 Build function target: `CTarget`
 
 ```julia
-function _build_function(target::CTarget, eqs::Array{<:Equation}, args...;
-                         conv = toexpr, expression = Val{true},
-                         fname = :diffeqf,
-                         lhsname=:du,rhsnames=[Symbol("RHS\$i") for i in 1:length(args)],
-                         libpath=tempname(),compiler=:gcc)
+_build_function(target::CTarget, eqs::Array{<:Equation}, args...;
+                conv = toexpr, expression = Val{true},
+                fname = :diffeqf,
+                lhsname=:du,rhsnames=[Symbol("RHS\$i") for i in 1:length(args)],
+                libpath=tempname(), compiler=:gcc)
 ```
 
 This builds an in-place C function. Only works on arrays of equations. If
@@ -680,7 +707,7 @@ and returns a lambda to that compiled function. These special keyword arguments
 control the compilation:
 
 - libpath: the path to store the binary. Defaults to a temporary path.
-- compiler: which C compiler to use. Defaults to :gcc, which is currently the
+- compiler: which C compiler to use. Defaults to `:gcc`, which is currently the
   only available option.
 """
 function _build_function(target::CTarget, eqs::Array{<:Equation}, args...;
@@ -727,15 +754,15 @@ end
 Build function target: `CTarget`
 
 ```julia
-function _build_function(target::CTarget, ex::AbstractArray, args...;
-                         columnmajor = true,
-                         conv        = toexpr,
-                         expression  = Val{true},
-                         fname       = :diffeqf,
-                         lhsname     = :du,
-                         rhsnames    = [Symbol("RHS\$i") for i in 1:length(args)],
-                         libpath     = tempname(),
-                         compiler    = :gcc)
+_build_function(target::CTarget, ex::AbstractArray, args...;
+                columnmajor = true,
+                conv        = toexpr,
+                expression  = Val{true},
+                fname       = :diffeqf,
+                lhsname     = :du,
+                rhsnames    = [Symbol("RHS\$i") for i in 1:length(args)],
+                libpath     = tempname(),
+                compiler    = :gcc)
 ```
 
 This builds an in-place C function. Only works on expressions. If
@@ -814,14 +841,14 @@ _build_function(target::CTarget, ex::Num, args...; kwargs...) = _build_function(
 Build function target: `StanTarget`
 
 ```julia
-function _build_function(target::StanTarget, eqs::Array{<:Equation}, vs, ps, iv;
-                         conv = toexpr, expression = Val{true},
-                         fname = :diffeqf, lhsname=:internal_var___du,
-                         rhsnames=[:internal_var___u,:internal_var___p,:internal_var___t])
+_build_function(target::StanTarget, eqs::Array{<:Equation}, vs, ps, iv;
+                conv = toexpr, expression = Val{true},
+                fname = :diffeqf, lhsname=:internal_var___du,
+                rhsnames=[:internal_var___u,:internal_var___p,:internal_var___t])
 ```
 
 This builds an in-place Stan function compatible with the Stan differential equation solvers.
-Unlike other build targets, this one requires (vs, ps, iv) as the function arguments.
+Unlike other build targets, this one requires `(vs, ps, iv)` as the function arguments.
 Only allowed on arrays of equations.
 """
 function _build_function(target::StanTarget, eqs::Array{<:Equation}, vs, ps, iv;
@@ -853,16 +880,16 @@ end
 Build function target: `StanTarget`
 
 ```julia
-function _build_function(target::StanTarget, ex::AbstractArray, vs, ps, iv;
-                         columnmajor = true,
-                         conv        = toexpr,
-                         expression  = Val{true},
-                         fname       = :diffeqf, lhsname=:internal_var___du,
-                         rhsnames    =  [:internal_var___u,:internal_var___p,:internal_var___t])
+_build_function(target::StanTarget, ex::AbstractArray, vs, ps, iv;
+                columnmajor = true,
+                conv        = toexpr,
+                expression  = Val{true},
+                fname       = :diffeqf, lhsname=:internal_var___du,
+                rhsnames    =  [:internal_var___u,:internal_var___p,:internal_var___t])
 ```
 
 This builds an in-place Stan function compatible with the Stan differential equation solvers.
-Unlike other build targets, this one requires (vs, ps, iv) as the function arguments.
+Unlike other build targets, this one requires `(vs, ps, iv)` as the function arguments.
 Only allowed on expressions, and arrays of expressions.
 """
 function _build_function(target::StanTarget, ex::AbstractArray, vs, ps, iv;
@@ -911,13 +938,13 @@ _build_function(target::StanTarget, ex::Num, vs, ps, iv; kwargs...) = _build_fun
 Build function target: `MATLABTarget`
 
 ```julia
-function _build_function(target::MATLABTarget, eqs::Array{<:Equation}, args...;
-                         conv = toexpr, expression = Val{true},
-                         lhsname=:internal_var___du,
-                         rhsnames=[:internal_var___u,:internal_var___p,:internal_var___t])
+_build_function(target::MATLABTarget, eqs::Array{<:Equation}, args...;
+                conv = toexpr, expression = Val{true},
+                lhsname=:internal_var___du,
+                rhsnames=[:internal_var___u,:internal_var___p,:internal_var___t])
 ```
 
-This builds an out of place anonymous function @(t,rhsnames[1]) to be used in MATLAB.
+This builds an out of place anonymous function `@(t,rhsnames[1])` to be used in MATLAB.
 Compatible with the MATLAB differential equation solvers. Only allowed on expressions,
 and arrays of expressions.
 """
@@ -944,13 +971,13 @@ end
 Build function target: `MATLABTarget`
 
 ```julia
-function _build_function(target::MATLABTarget, ex::AbstractArray, args...;
-                         columnmajor = true,
-                         conv        = toexpr,
-                         expression  = Val{true},
-                         fname       = :diffeqf,
-                         lhsname     = :internal_var___du,
-                         rhsnames    = [:internal_var___u,:internal_var___p,:internal_var___t])
+_build_function(target::MATLABTarget, ex::AbstractArray, args...;
+                columnmajor = true,
+                conv        = toexpr,
+                expression  = Val{true},
+                fname       = :diffeqf,
+                lhsname     = :internal_var___du,
+                rhsnames    = [:internal_var___u,:internal_var___p,:internal_var___t])
 ```
 
 This builds an out of place anonymous function @(t,rhsnames[1]) to be used in MATLAB.

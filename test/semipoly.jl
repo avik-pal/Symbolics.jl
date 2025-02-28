@@ -22,7 +22,7 @@ using Random
     @test isequal(d, Dict(1 => 1 << 12, x => (1 << 11) * 12))
 end
 
-@testset "maintein SymbolicUtils.Symbolic subtype" begin
+@testset "maintain SymbolicUtils.Symbolic subtype" begin
     pow_expr = 7^(3y + sin(y))
     @test SymbolicUtils.ispow(Symbolics.unwrap(pow_expr))
     dict, nl = semipolynomial_form(pow_expr, [y], Inf)
@@ -426,6 +426,10 @@ end
 
 const components = [2, a, b, c, x, y, z, (1+x), (1+y)^2, z*y, z*x]
 
+function verify(t::Symbolics.BasicSymbolic{Number}, d, wrt, nl)
+    verify(Num(t), d, wrt, nl)
+end
+
 function verify(t, d, wrt, nl)
     try
         iszero(t - (isempty(d) ? nl : sum(k*v for (k, v) in d) + nl))
@@ -504,4 +508,8 @@ for i=1:20
     @testset "fuzz semi-polynomial-form ($i/20)" begin
         trial()
     end
+end
+
+@testset "Extracted from fuzz testing" begin
+    @test verify(2.25(2.0 + 2c)*(c^2), Dict{Any, Any}(c^3 => 4.5, c^2 => 4.5), Num[c, y, z], 0)
 end

@@ -3,10 +3,11 @@ using Symbolics
 using ReferenceTests
 using Test
 using SymbolicUtils.Code: toexpr, LiteralExpr
+import ..limit2
 
 _repr(x) = repr(toexpr(LiteralExpr(x)) |> Base.remove_linenums!)
 function test_funcs(name, f, args...; broken=false)
-    outplace, inplace = build_function(f, args...)
+    outplace, inplace = build_function(f, args...; checkbounds = true)
     if broken
         @test_broken open(x->read(x, String), "build_function_tests/$name-outplace.jl") == _repr(outplace)
         @test_broken open(x->read(x, String), "build_function_tests/$name-inplace.jl") == _repr(outplace)
@@ -55,12 +56,11 @@ end
     end
 
     @test iszero(scalarize(y[1,1]))
-    test_funcs("stencil-extents", y, x, broken=broken)
+    test_funcs("stencil-extents", y, x)
 
     @variables u[1:5, 1:5]
     n = 5
-    limit = Main.limit
-    y = @arrayop (i, j) u[limit(i-1, n), limit(j+1,n)] i in 1:n j in 1:n
+    y = @arrayop (i, j) u[limit2(i-1, n), limit2(j+1,n)] i in 1:n j in 1:n
     test_funcs("manual-limits", y, u)
 
     z = @arrayop (i, j) y[j, i]
