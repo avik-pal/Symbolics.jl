@@ -673,6 +673,8 @@ end
     @test isequal(Symbolics.derivative(dot(x, x), x[1]), 2x[1])
     @test isequal(Symbolics.derivative(dot(y, x), x[1]), y[1])
     @test isequal(Symbolics.derivative(dot(y, x), y[1]), x[1])
+    @test isequal(Symbolics.derivative(sqrt(dot(x, x)), x[1]), x[1] / sqrt(dot(x, x)))
+    @test isequal(Symbolics.derivative(sqrt(dot(x, y)), x[1]), y[1] / 2sqrt(dot(x, y)))
 end
 
 @testset "Derivative of `mapreduce` and similar arrayops" begin
@@ -681,6 +683,9 @@ end
     @test isequal(Symbolics.derivative(prod(x), x[1]), x[2]*x[3])
     ex = @arrayop () x[i] * y[i]
     @test isequal(Symbolics.derivative(ex, x[1]), y[1])
+    @test isequal(Symbolics.derivative(sqrt(sum(x)), x[1]), 1/2sqrt(sum(x)))
+    @test isequal(Symbolics.derivative(sqrt(prod(x)), x[1]), (x[2] * x[3])/2sqrt(prod(x)))
+    @test isequal(Symbolics.derivative(sqrt(ex), x[1]), y[1] / 2sqrt(ex))
 end
 
 struct Op <: SymbolicUtils.Operator end
@@ -695,6 +700,7 @@ end
     @variables x[1:3] y[1:3, 1:3]
     for i in 1:3
         @test isequal(Symbolics.derivative(norm(x), x[i]), Symbolics.derivative(norm(collect(x)), x[i]))
+        @test isequal(Symbolics.derivative(norm(x) ^ 2, x[i]), (2x[i] * norm(x)) / sqrt(abs2(x[1]) + abs2(x[2]) + abs2(x[3])))
     end
     for i in 1:3, j in 1:3
         @test isequal(Symbolics.derivative(norm(y), y[i, j]), Symbolics.derivative(norm(collect(y)), y[i, j]))

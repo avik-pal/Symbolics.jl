@@ -137,17 +137,31 @@ end
 
 function _occursin_info(x::BasicSymbolic{VartypeT}, expr::BasicSymbolic{VartypeT}, fail::Bool = true)
     shexpr = shape(expr)
+    isix = is_scalar_indexed(x)
+    isie = is_scalar_indexed(expr)
+
     if SymbolicUtils.is_array_shape(shexpr)
         fail && error("Differentiation with array expressions is not yet supported")
+        if isix
+            return isequal(expr, arguments(x)[1]) || SymbolicUtils.query(isequal(x), expr)
+        end
         return SymbolicUtils.query(isequal(x), expr)
     end
 
     iscall(expr) || return isequal(x, expr)
     isequal(x, expr) && return true
 
-    isix = is_scalar_indexed(x)
-    isie = is_scalar_indexed(expr)
-
+    @match expr begin
+        BSImpl.ArrayOp(; expr, term) && if term === nothing end => begin
+            aop_pred = let x = x, isix = isix
+                function _aop_pred(ex::SymbolicT)
+                    isequal(ex, x) || isix && iscall(ex) && operation(ex) === getindex && isequal(arguments(ex)[1], arguments(x)[1])
+                end
+            end
+            return SU.query(aop_pred, expr)
+        end
+        _ => nothing
+    end
     if isie
         isix && return false
         return SymbolicUtils.query(isequal(x), expr)
@@ -165,9 +179,13 @@ function _occursin_info(x::BasicSymbolic{VartypeT}, expr::BasicSymbolic{VartypeT
         isequal(domain.variables, x) && return false
     end
 
-    predicate = let cond = op !== getindex, x = x
+    predicate = let cond = op !== getindex &&
+            op !== LinearAlgebra.dot &&
+            op !== LinearAlgebra.norm &&
+            !SU.isarrayop(expr),
+            x = x
         function __predicate(a)
-            occursin_info(x, a, cond)
+            return occursin_info(x, a, cond)
         end
     end
     any(predicate, arguments(expr))
