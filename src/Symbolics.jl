@@ -208,6 +208,7 @@ include("symstruct.jl")
 
 import Libdl
 include("build_function.jl")
+include("codegen_fn.jl")
 export build_function
 
 include("extra_functions.jl")
@@ -581,6 +582,8 @@ function __init__()
     end
     SymbolicUtils.hashcons(RootsOf, true)
     SymbolicUtils.hashcons(IM, true)
+    SymbolicUtils.hashcons(IIP_OUTSYM, true)
+    SymbolicUtils.hashcons(IIP_ALLOCATOR, true)
 end
 
 export inverse, left_inverse, right_inverse, @register_inverse, has_inverse, has_left_inverse, has_right_inverse
