@@ -203,6 +203,9 @@ export groebner_basis, is_groebner_basis
 include("taylor.jl")
 export series, taylor, taylor_coeff
 
+export SymStruct, @symstruct
+include("symstruct.jl")
+
 import Libdl
 include("build_function.jl")
 export build_function
@@ -585,9 +588,6 @@ include("inverse.jl")
 
 export rootfunction, left_continuous_function, right_continuous_function, @register_discontinuity
 include("discontinuities.jl")
-
-export SymStruct, @symstruct
-include("symstruct.jl")
 
 @public Arr, NAMESPACE_SEPARATOR, Unknown, VariableDefaultValue, VariableSource
 @public _parse_vars, derivative, gradient, jacobian, sparsejacobian, hessian, sparsehessian
