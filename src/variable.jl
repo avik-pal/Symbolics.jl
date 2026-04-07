@@ -340,34 +340,38 @@ end
 
 function SymbolicIndexingInterface.symbolic_evaluate(ex::Union{Num, Arr, BasicSymbolic, Equation, Inequality}, d::Dict; kwargs...)
     val = fixpoint_sub(ex, d; fold = Val(true), kwargs...)
-    return _recursive_unwrap(val; eval = Val(true))
+    return _recursive_unwrap(val, Val(true))
 end
 
 for T in [LinearAlgebra.UpperTriangular, LinearAlgebra.LowerTriangular]
-    @eval function _recursive_unwrap(val::$T; eval::Val{_eval} = Val(false)) where {_eval}
-        $T(_recursive_unwrap(collect(val); eval = Val{_eval}()))
+    @eval function _recursive_unwrap(val::$T, ::Val{eval} = Val(false)) where {eval}
+        $T(_recursive_unwrap(collect(val), Val{eval}()))
     end
 end
 
-function _recursive_unwrap(val; eval::Val{_eval} = Val(false)) where {_eval}
+function _recursive_unwrap(val, ::Val{eval} = Val(false)) where {eval}
     if symbolic_type(val) == NotSymbolic() && val isa Union{AbstractArray, Tuple}
         if parent(val) !== val
-            return Setfield.@set val.parent = _recursive_unwrap(parent(val); eval = Val{_eval}())
+            return Setfield.@set val.parent = _recursive_unwrap(parent(val), Val{eval}())
         end
-        return _recursive_unwrap.(val; eval = Val{_eval}())
+        return _recursive_unwrap.(val, Val{eval}())
     else
-        return _eval ? value(val) : unwrap(val)
+        return eval ? value(val) : unwrap(val)
     end
 end
 
-function _recursive_unwrap(val::AbstractSparseArray; eval::Val{_eval} = Val(false)) where {_eval}
+function _recursive_unwrap(val::StaticArraysCore.SizedVector, ::Val{eval} = Val(false)) where {eval}
+    return _recursive_unwrap.(val, Val{eval}())
+end
+
+function _recursive_unwrap(val::AbstractSparseArray, ::Val{eval} = Val(false)) where {eval}
     if val isa AbstractSparseVector
         (Is, Vs) = findnz(val)
-        Vs = _recursive_unwrap.(Vs; eval = Val{_eval}())
+        Vs = _recursive_unwrap.(Vs, Val{eval}())
         return SparseVector(length(val), Is, Vs)
     else
         (Is, Js, Vs) = findnz(val)
-        Vs = _recursive_unwrap.(Vs; eval = Val{_eval}())
+        Vs = _recursive_unwrap.(Vs, Val{eval}())
         return sparse(Is, Js, Vs, size(val)...) 
     end
 end
