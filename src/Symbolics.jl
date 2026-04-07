@@ -582,6 +582,8 @@ function __init__()
     end
     SymbolicUtils.hashcons(RootsOf, true)
     SymbolicUtils.hashcons(IM, true)
+    SymbolicUtils.hashcons(COMMON_ONE, true)
+    SymbolicUtils.hashcons(COMMON_ZERO, true)
     SymbolicUtils.hashcons(IIP_OUTSYM, true)
     SymbolicUtils.hashcons(IIP_ALLOCATOR, true)
 end
