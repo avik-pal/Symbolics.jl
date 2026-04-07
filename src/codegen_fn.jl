@@ -30,7 +30,7 @@ function canonicalize_args(args::Vector, inbounds::Bool)
 end
 
 function codegen_function(
-        ir::IRStructure{VartypeT}, expr::SymbolicT, args::Vector;
+        ir::IRStructure{VartypeT}, expr::Union{SymbolicT, SU.Code.CodegenPrimitive}, args::Vector;
         nanmath::Bool = true, wrap_code::Tuple = (identity, identity),
         checkbounds = false, iip_config::NTuple{2, Bool} = (true, true), kwargs...
     )
