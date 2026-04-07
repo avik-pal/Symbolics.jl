@@ -271,3 +271,18 @@ end
     @test Jtmp[3] == utmp[2]
 end
 
+@testset "Repeated codegen produces identical expressions" begin
+    @variables t x(t) fn(..) y(t)
+    expr = [x + fn(y + 2t), fn(x + 3sin(t)) * y]
+    args = [[x, y], [fn], t]
+    oopexprs = Expr[]
+    iipexprs = Expr[]
+    for i in 1:10
+        foop, fiip = Symbolics.codegen_function(ir, expr, args)
+        push!(oopexprs, foop)
+        push!(iipexprs, fiip)
+    end
+    @test allequal(oopexprs)
+    @test allequal(iipexprs)
+end
+

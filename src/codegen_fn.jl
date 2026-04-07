@@ -1,13 +1,13 @@
-const DEFAULT_IIP = :(
-    function (args...)
-        error("The in-place version for this function is invalid")
+function get_unimplemented_fn(nargs, type)
+    expr = :(function unimplemented()
+        error("The $($type) version for this function is invalid")
+     end)
+
+    for i in 1:nargs
+        push!(expr.args[1].args, Symbol(:x, i))
     end
-)
-const DEFAULT_OOP = :(
-    function (args...)
-        error("The out-place version for this function is invalid")
-    end
-)
+    return expr
+end
 
 const IIP_OUTSYM = only(@syms $DEFAULT_OUTSYM::Any)
 const IIP_ALLOCATOR = SU.Term{VartypeT}(
@@ -30,7 +30,7 @@ function canonicalize_args(args::Vector, inbounds::Bool)
 end
 
 function codegen_function(
-        ir::IRStructure{VartypeT}, expr::SymbolicT, args::Vector;
+        ir::IRStructure{VartypeT}, expr, args::Vector;
         nanmath::Bool = true, wrap_code::Tuple = (identity, identity),
         checkbounds = false, iip_config::NTuple{2, Bool} = (true, true), kwargs...
     )
@@ -51,9 +51,10 @@ function codegen_function(
             )
         end
     else
-        oop = DEFAULT_OOP
+        oop = get_unimplemented_fn(length(args), "out-of-place")
     end
     if iip_config[2] && SU.is_array_shape(SU.shape(expr))
+        expr = SConst(expr)
         iipexpr = if Code.supports_with_allocator(expr)
             Code.with_allocator(IIP_ALLOCATOR, expr)
         else
@@ -72,7 +73,7 @@ function codegen_function(
             )
         end
     else
-        iip = DEFAULT_IIP
+        iip = get_unimplemented_fn(length(args) + 1, "in-place")
     end
     return oop, iip
 end
@@ -113,7 +114,7 @@ function codegen_function(
             )
         end
     else
-        oop = DEFAULT_OOP
+        oop = get_unimplemented_fn(length(args), "out-of-place")
     end
 
     if iip_config[2]
@@ -139,7 +140,7 @@ function codegen_function(
             )
         end
     else
-        iip = DEFAULT_IIP
+        iip = get_unimplemented_fn(length(args) + 1, "in-place")
     end
     return oop, iip
 end
