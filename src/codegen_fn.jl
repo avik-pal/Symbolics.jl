@@ -1,6 +1,14 @@
+struct FunctionUnimplementedError <: Exception
+    type::String
+end
+
+function Base.showerror(io::IO, err::FunctionUnimplementedError)
+    print(io, "The $(err.type) version for this function is invalid")
+end
+
 function get_unimplemented_fn(nargs, type)
     expr = :(function unimplemented()
-        error("The $($type) version for this function is invalid")
+        throw($FunctionUnimplementedError($type))
      end)
 
     for i in 1:nargs

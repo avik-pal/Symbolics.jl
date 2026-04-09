@@ -68,11 +68,11 @@ end
     out_2 = similar(out_1)
     h_ip!(out_1, inputs...)
     h_julia!(out_2, inputs...)
-    @test_throws ErrorException h3_oop(inputs...)
+    @test_throws Symbolics.FunctionUnimplementedError h3_oop(inputs...)
     @test out_1 == out_2
     h3_ip(out_1, inputs...)
     @test out_1 == out_2
-    @test_throws ErrorException h4_ip(out_1, inputs...)
+    @test_throws Symbolics.FunctionUnimplementedError h4_ip(out_1, inputs...)
     @test h4_oop(inputs...) == h_julia(inputs...)
     out_1 = similar(h, Int)
     fill!(out_1, 10)
