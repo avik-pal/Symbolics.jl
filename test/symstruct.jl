@@ -26,6 +26,13 @@ end
     @test isequal(arguments(ex), [SU.unwrap(rec1)])
 end
 
+@testset "`promote_symtype`" begin
+    @variables rec1::Record1
+    @test SU.promote_symtype(operation(SU.unwrap(rec1.x)), Record1) === Int
+    @test SU.promote_symtype(operation(SU.unwrap(rec1.y)), Record1) === String
+    @test SU.promote_symtype(operation(SU.unwrap(rec1.z)), Record1) === Vector{Real}
+end
+
 @testset "Basic record" begin
     @variables rec::Record1
 

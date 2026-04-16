@@ -227,7 +227,7 @@ function (::SymbolicGetproperty{T, field})(x::T) where {T, field}
     getproperty(x, field)
 end
 
-function SymbolicUtils.promote_type(::SymbolicGetproperty{T, field}, x::SymbolicUtils.TypeT) where {T, field}
+function SymbolicUtils.promote_symtype(::SymbolicGetproperty{T, field}, x::SymbolicUtils.TypeT) where {T, field}
     @assert x == T
     fieldtype(x, field)
 end
