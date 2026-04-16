@@ -19,6 +19,13 @@ end
     @test hash(rec1) == hash(SU.unwrap(rec1))
 end
 
+@testset "`getproperty` operation and arguments" begin
+    @variables rec1::Record1
+    ex = SU.unwrap(rec1.x)
+    @test operation(ex) === Symbolics.SymbolicGetproperty{Record1, :x}()
+    @test isequal(arguments(ex), [SU.unwrap(rec1)])
+end
+
 @testset "Basic record" begin
     @variables rec::Record1
 

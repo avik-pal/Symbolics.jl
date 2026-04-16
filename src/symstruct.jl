@@ -248,7 +248,7 @@ function _literal_getproperty(sym::SymStruct{T}, ::Val{name}) where {T, name}
     fShape = field_shape(T, Val{name}())
     fname = BSImpl.Const{VartypeT}(name)
     _struct = unwrap(sym)
-    args = ArgsT{VartypeT}((_struct, fname))
+    args = ArgsT{VartypeT}((_struct,))
     val = BSImpl.Term{VartypeT}(SymbolicGetproperty{T, name}(), args; type = fT, shape = fShape)
     if has_symwrapper(fT)
         return wrapper_type(fT)(val)
