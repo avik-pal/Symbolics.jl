@@ -33,6 +33,13 @@ is_wrapper_type(::Type{S}) where {T, S <: SymStruct{<:T}} = true
 wraps_type(::Type{S}) where {T, S <: SymStruct{T}} = T
 iswrapped(::SymStruct{T}) where {T} = true
 
+issymstruct(x) = false
+issymstruct(x::SymStruct) = true
+function issymstruct(x::SymbolicT)
+    T = symtype(x)
+    return has_symwrapper(T)::Bool && wrapper_type(T)::DataType === SymStruct{T}
+end
+
 SymbolicUtils.unwrap(x::SymStruct) = getfield(x, 1)
 SymbolicUtils.infer_vartype(::Type{SymStruct{T}}) where {T} = VartypeT
 
