@@ -37,6 +37,12 @@ is_wrapper_type(::Type{S}) where {T, S <: SymStruct{<:T}} = true
 wraps_type(::Type{S}) where {T, S <: SymStruct{T}} = T
 iswrapped(::SymStruct{T}) where {T} = true
 
+"""
+    issymstruct(x) -> Bool
+
+Return `true` if `x` is a `SymStruct` or a symbolic expression whose `symtype` has been
+registered via [`@symstruct`](@ref). Return `false` otherwise.
+"""
 issymstruct(x) = false
 issymstruct(x::SymStruct) = true
 function issymstruct(x::SymbolicT)
@@ -219,6 +225,11 @@ Struct used as operation for symbolic getproperty on `SymStruct{T}` with field `
 """
 struct SymbolicGetproperty{T, field} end
 
+"""
+    field_name(f::SymbolicGetproperty{T, field}) -> Symbol
+
+Return the name of the struct field accessed by `f`.
+"""
 field_name(::SymbolicGetproperty{T, field}) where {T, field} = field
 
 function (f::SymbolicGetproperty{T})(x::SymbolicT) where {T}
@@ -271,6 +282,13 @@ function field_shape(::Type{T}, ::Val{name}) where {T, name}
     shape_from_type(fieldtype(T, name))
 end
 
+"""
+    shape_from_type(::Type{T})
+
+Infer the symbolic shape of a value of type `T`. For `AbstractArray{E, N}` subtypes,
+returns `SymbolicUtils.Unknown(N)` (unknown shape with known rank). For all other types,
+returns an empty `ShapeVecT`, indicating a scalar.
+"""
 shape_from_type(::Type{A}) where {T, N, A <: AbstractArray{T, N}} = SymbolicUtils.Unknown(N)
 shape_from_type(::Type{T}) where {T} = SymbolicUtils.ShapeVecT()
 
@@ -298,6 +316,14 @@ function SymbolicUtils.Code.function_to_expr(@nospecialize(f::SymbolicGetpropert
     return :($(SymbolicUtils.Code.toexpr(args[1], st)).$fname)
 end
 
+"""
+    symstruct_field_supports_linear_indexing(::Type{T}, ::Val{field}) -> Bool
+
+Return `true` if field `field` of struct type `T` can participate in linear indexing of a
+`SymStruct{T}`. A field is indexable when its shape is fully known (i.e. not
+`SymbolicUtils.Unknown`). Nested `SymStruct` fields are recursively checked via
+[`symstruct_supports_linear_indexing`](@ref).
+"""
 function symstruct_field_supports_linear_indexing(::Type{T}, ::Val{field}) where {T, field}
     fT = fieldtype(T, field)
     if has_symwrapper(fT) && wrapper_type(fT) === SymStruct{fT}
@@ -313,6 +339,14 @@ function symstruct_field_supports_linear_indexing(::Type{T}, ::Val{field}) where
     return field_shape(T, Val{field}()) isa SU.ShapeVecT
 end
 
+"""
+    symstruct_supports_linear_indexing(::Type{T}) -> Bool
+
+Return `true` if every field of struct type `T` supports linear indexing, meaning that a
+`SymStruct{T}` can be indexed with a single integer via `getindex`. This requires each
+field (and any nested `SymStruct` fields) to have a fully known, statically determinable
+shape.
+"""
 @generated function symstruct_supports_linear_indexing(::Type{T}) where {T}
     expr = Expr(:&&)
     for i in 1:fieldcount(T)
@@ -322,6 +356,14 @@ end
     return expr
 end
 
+"""
+    symstruct_field_length(::Type{T}, ::Val{field}) -> Int
+
+Return the number of scalar symbolic elements contributed by field `field` of struct type
+`T` to the linear index space of a `SymStruct{T}`. Scalars contribute `1`, arrays
+contribute the product of their shape ranges, and nested `SymStruct` fields contribute
+their own [`symstruct_length`](@ref).
+"""
 function symstruct_field_length(::Type{T}, ::Val{field}) where {T, field}
     fT = fieldtype(T, field)
     if has_symwrapper(fT) && wrapper_type(fT) === SymStruct{fT}
@@ -341,6 +383,13 @@ function symstruct_field_length(::Type{T}, ::Val{field}) where {T, field}
     return baselen
 end
 
+"""
+    symstruct_length(::Type{T}) -> Int
+
+Return the total number of scalar symbolic elements in the linear index space of a
+`SymStruct{T}`, equal to the sum of [`symstruct_field_length`](@ref) over all fields.
+This is the value returned by `length` on a `SymStruct{T}` instance.
+"""
 @generated function symstruct_length(::Type{T}) where {T}
     expr = Expr(:call, (+))
     for i in 1:fieldcount(T)
@@ -351,6 +400,13 @@ end
 
 Base.length(s::SymStruct{T}) where {T} = symstruct_length(T)
 
+"""
+    symstruct_checkbounds([Bool], s::SymStruct{T}, idx::Integer)
+
+Check whether linear index `idx` is within bounds for `s`. The two-argument form (without
+`Bool`) throws a `BoundsError` on failure. The three-argument form with `Bool` as first
+argument returns `true` or `false` without throwing.
+"""
 function symstruct_checkbounds(::Type{Bool}, s::SymStruct{T}, idx::Integer) where {T}
     return 1 <= idx <= symstruct_length(T)
 end
@@ -358,6 +414,13 @@ function symstruct_checkbounds(s::SymStruct{T}, idx::Integer) where {T}
     symstruct_checkbounds(Bool, s, idx) || throw(BoundsError(s, idx))
 end
 
+"""
+    symstruct_field_range(::Type{T}, ::Val{field}) -> UnitRange{Int}
+
+Return the range of linear indices within a `SymStruct{T}` that correspond to field
+`field`. Always starts at `1`; the upper bound equals
+[`symstruct_field_length`](@ref)`(T, Val{field}())`.
+"""
 function symstruct_field_range(::Type{T}, ::Val{field}) where {T, field}
     return 1:symstruct_field_length(T, Val{field}())
     fT = fieldtype(T, field)
@@ -372,6 +435,13 @@ function symstruct_field_range(::Type{T}, ::Val{field}) where {T, field}
     return 1:prod(length, fshape; init = 1)
 end
 
+"""
+    symstruct_field_getindex(s::SymStruct{T}, ::Val{field}, i::Integer) -> SymbolicT
+
+Return the `i`-th scalar symbolic element within field `field` of `s`. For nested
+`SymStruct` fields, delegates recursively. For array fields whose elements are nested
+`SymStruct`s, maps `i` to the appropriate element and inner index.
+"""
 function symstruct_field_getindex(s::SymStruct{T}, ::Val{field}, i::Integer) where {T, field}
     fT = fieldtype(T, field)
     if has_symwrapper(fT) && wrapper_type(fT) === SymStruct{fT}
