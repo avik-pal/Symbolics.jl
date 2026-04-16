@@ -14,6 +14,10 @@ symbolic struct.
 the appropriate field access. This can only wrap concrete struct types (`isconcretetype(T)`
 must be `true`). `getproperty` on this struct leverages `fieldnames` and `fieldtypes`.
 Thus, will thus not respect custom `getproperty` methods on the wrapped struct type.
+
+`SymStruct{T}` subtypes `AbstractVector{Symbolics.SymbolicT}`. For a fully registered type
+where all fields (including those of nested symbolic structs) are of known size, `SymStruct{T}`
+can be linearly indexed to access fields in order. Array fields are indexed linearly.
 """
 struct SymStruct{T}
     sym::SymbolicT
@@ -293,3 +297,126 @@ function SymbolicUtils.Code.function_to_expr(@nospecialize(f::SymbolicGetpropert
     end
     return :($(SymbolicUtils.Code.toexpr(args[1], st)).$fname)
 end
+
+function symstruct_field_supports_linear_indexing(::Type{T}, ::Val{field}) where {T, field}
+    fT = fieldtype(T, field)
+    if has_symwrapper(fT) && wrapper_type(fT) === SymStruct{fT}
+        return symstruct_supports_linear_indexing(fT)
+    end
+    if fT <: Union{AbstractArray, Tuple}
+        efT = eltype(fT)
+        return field_shape(T, Val{field}()) isa SU.ShapeVecT && (
+            !has_symwrapper(efT) || wrapper_type(efT) !== SymStruct{efT} ||
+                symstruct_supports_linear_indexing(efT)
+        )
+    end
+    return field_shape(T, Val{field}()) isa SU.ShapeVecT
+end
+
+@generated function symstruct_supports_linear_indexing(::Type{T}) where {T}
+    expr = Expr(:&&)
+    for i in 1:fieldcount(T)
+        fnameval = Val{fieldname(T, i)}()
+        push!(expr.args, :($symstruct_field_supports_linear_indexing(T, $fnameval)))
+    end
+    return expr
+end
+
+function symstruct_field_length(::Type{T}, ::Val{field}) where {T, field}
+    fT = fieldtype(T, field)
+    if has_symwrapper(fT) && wrapper_type(fT) === SymStruct{fT}
+        return symstruct_length(fT)
+    end
+    # The entire function is well-inferred, and this edge case
+    # allows const-prop to collapse `symstruct_length` to a constant
+    # when all fields are scalars.
+    if !(fT <: Union{AbstractArray, Tuple})
+        return 1
+    end
+    efT = eltype(fT)
+    baselen = prod(length, field_shape(T, Val{field}())::SU.ShapeVecT; init = 1)
+    if has_symwrapper(efT) && wrapper_type(efT) === SymStruct{efT}
+        return baselen * symstruct_length(efT)
+    end
+    return baselen
+end
+
+@generated function symstruct_length(::Type{T}) where {T}
+    expr = Expr(:call, (+))
+    for i in 1:fieldcount(T)
+        push!(expr.args, :($symstruct_field_length(T, Val{$(QuoteNode(fieldname(T, i)))}())))
+    end
+    return expr
+end
+
+Base.length(s::SymStruct{T}) where {T} = symstruct_length(T)
+
+function symstruct_checkbounds(::Type{Bool}, s::SymStruct{T}, idx::Integer) where {T}
+    return 1 <= idx <= symstruct_length(T)
+end
+function symstruct_checkbounds(s::SymStruct{T}, idx::Integer) where {T}
+    symstruct_checkbounds(Bool, s, idx) || throw(BoundsError(s, idx))
+end
+
+function symstruct_field_range(::Type{T}, ::Val{field}) where {T, field}
+    return 1:symstruct_field_length(T, Val{field}())
+    fT = fieldtype(T, field)
+    if has_symwrapper(fT) && wrapper_type(fT) === SymStruct{fT}
+        return 1:symstruct_length(fT)
+    end
+    # Same fast-path as in `symstruct_field_length`
+    if !(fT <: Union{AbstractArray, Tuple})
+        return 1:1
+    end
+    fshape = field_shape(T, Val{field}())::SU.ShapeVecT
+    return 1:prod(length, fshape; init = 1)
+end
+
+function symstruct_field_getindex(s::SymStruct{T}, ::Val{field}, i::Integer) where {T, field}
+    fT = fieldtype(T, field)
+    if has_symwrapper(fT) && wrapper_type(fT) === SymStruct{fT}
+        return getindex(SymbolicGetproperty{T, field}()(s), i)
+    end
+    fval = SymbolicGetproperty{T, field}()(s)
+    if fval isa Num
+        return unwrap(fval)
+    elseif fval isa SymbolicT
+        return fval
+    end
+    fval = unwrap(fval)
+    efT = eltype(fT)
+    if has_symwrapper(efT) && wrapper_type(efT) === SymStruct{efT}
+        N = symstruct_length(efT)
+        return SymStruct{efT}(fval[SymbolicUtils.stable_eachindex(fval)[div(i - 1, N) + 1]])[mod1(i, N)]
+    end
+    return fval[SymbolicUtils.stable_eachindex(fval)[i]]
+end
+
+@generated function Base.getindex(s::SymStruct{T}, idx::Integer) where {T}
+    conditions = Expr[]
+    bodies = Expr[]
+    offset = 0
+    body = Expr(:block)
+    for i in 1:fieldcount(T)
+        fname = fieldname(T, i)
+        ftype = fieldtype(T, i)
+        fieldval = Val{fieldname(T, i)}()
+        push!(body.args, :(if idx in $symstruct_field_range(T, $fieldval)
+            return $symstruct_field_getindex(s, $fieldval, idx)::$SymbolicT
+        else
+            idx -= $symstruct_field_length(T, $fieldval)
+        end))
+    end
+
+    return Expr(:block, Expr(:call, symstruct_checkbounds, :s, :idx), body, :(error("Unreachable")))
+end
+
+function Base.iterate(s::SymStruct{T}) where {T}
+    return (s[1], 2)
+end
+function Base.iterate(s::SymStruct{T}, i::Int) where {T}
+    i > length(s) && return nothing
+    return (s[i], i + 1)
+end
+Base.eltype(s::SymStruct) = SymbolicT
+
