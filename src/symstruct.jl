@@ -43,6 +43,13 @@ end
 SymbolicUtils.unwrap(x::SymStruct) = getfield(x, 1)
 SymbolicUtils.infer_vartype(::Type{SymStruct{T}}) where {T} = VartypeT
 
+function Base.isequal(a::SymStruct{T}, b::SymStruct{T}) where {T}
+    isequal(unwrap(a), unwrap(b))
+end
+Base.isequal(a::SymStruct{T}, b::SymbolicT) where {T} = isequal(unwrap(a), b)
+Base.isequal(a::SymbolicT, b::SymStruct{T}) where {T} = isequal(a, unwrap(b))
+Base.hash(a::SymStruct{T}, h::UInt64) where {T} = hash(unwrap(a), h)
+
 function field_shape end
 
 """

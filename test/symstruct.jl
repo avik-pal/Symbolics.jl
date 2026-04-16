@@ -11,6 +11,14 @@ end
 
 @symstruct Record1
 
+@testset "`isequal` and `hash`" begin
+    @variables rec1::Record1
+    @test isequal(rec1, rec1)
+    @test isequal(rec1, SU.unwrap(rec1))
+    @test isequal(SU.unwrap(rec1), rec1)
+    @test hash(rec1) == hash(SU.unwrap(rec1))
+end
+
 @testset "Basic record" begin
     @variables rec::Record1
 
