@@ -177,6 +177,46 @@ function diff2term(O::SymbolicT)
         end
     end
     isempty(opchain) && return O
+
+    # Handle struct field accesses: D(f.x) → diff2term(D(f)).x
+    # References to SymbolicGetproperty / field_name / SymStruct are late-bound (from symstruct.jl).
+    has_gp = false
+    access_ops = Union{Symbol, SU.StableIndex{Int}}[]
+    cur = inner
+    while iscall(cur)
+        f = operation(cur)
+        args = arguments(cur)
+        if f isa SymbolicGetproperty
+            has_gp = true
+            push!(access_ops, field_name(f))              # Symbol (field name)
+            cur = args[1]
+        elseif f === getindex
+            push!(access_ops, SU.StableIndex{Int}(cur))  # StableIndex extracted from the full getindex term
+            cur = args[1]
+        else
+            break
+        end
+    end
+
+    if has_gp
+        # Reconstruct D^n(cur) and apply diff2term to the base variable.
+        diff_cur = cur
+        for d in Iterators.reverse(opchain)    # opchain is outer→inner; reverse to build inside-out
+            diff_cur = d(diff_cur)
+        end
+        result = diff2term(diff_cur)
+        # Re-apply access ops (collected outer→inner, so reverse to apply inner-first).
+        for op in Iterators.reverse(access_ops)
+            if op isa Symbol
+                T = symtype(result)
+                result = unwrap(getproperty(SymStruct{T}(result), op))
+            else   # SU.StableIndex{Int}
+                result = result[op]
+            end
+        end
+        return result
+    end
+
     return rename(inner, diff2term_name(inner, opchain))
 end
 diff2term(O::Num) = Num(diff2term(unwrap(O)))
