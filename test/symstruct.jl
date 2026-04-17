@@ -217,3 +217,81 @@ abstract type AbstractRecord2{T} end
     @test Symbolics.has_symwrapper(AbstractRecord2{Int})
     @test Symbolics.wrapper_type(AbstractRecord2{Int}) == SymStruct{<:AbstractRecord2{Int}}
 end
+
+@testset "`issymstruct`" begin
+    @variables x rec1::Record1
+    # SymStruct instance → true
+    @test Symbolics.issymstruct(rec1)
+    # Unwrapped BasicSymbolic whose symtype is a registered struct → true
+    @test Symbolics.issymstruct(SU.unwrap(rec1))
+    # Plain scalar variable → false
+    @test !Symbolics.issymstruct(x)
+    @test !Symbolics.issymstruct(SU.unwrap(x))
+    # Field-access result (symtype Int, not a struct type) → false
+    @test !Symbolics.issymstruct(SU.unwrap(rec1.x))
+    # Non-symbolic value → false
+    @test !Symbolics.issymstruct(1)
+end
+
+@testset "Linear indexing" begin
+    # Record1 has z::Vector{Real} with unknown shape → linear indexing not supported
+    @test !Symbolics.symstruct_supports_linear_indexing(Record1)
+    # Record2{Int} has shape(:z) = [1:3] → supported
+    @test Symbolics.symstruct_supports_linear_indexing(Record2{Int})
+
+    @variables rec::Record2{Int}
+    # x::Int (1 element) + y::String (1 element) + z::Vector{Int} shape [1:3] (3 elements) = 5
+    @test length(rec) == 5
+
+    @test isequal(rec[1], SU.unwrap(rec.x))
+    @test isequal(rec[2], SU.unwrap(rec.y))
+    @test isequal(rec[3], SU.unwrap(rec.z[1]))
+    @test isequal(rec[4], SU.unwrap(rec.z[2]))
+    @test isequal(rec[5], SU.unwrap(rec.z[3]))
+
+    @test_throws BoundsError rec[0]
+    @test_throws BoundsError rec[6]
+
+    elems = collect(rec)
+    @test length(elems) == 5
+    @test all(e -> e isa Symbolics.SymbolicT, elems)
+    @test isequal(elems[1], rec[1])
+    @test isequal(elems[5], rec[5])
+end
+
+@testset "Linear indexing with nested SymStruct" begin
+    @test Symbolics.symstruct_supports_linear_indexing(Record2{Record2{Int}})
+    # x(1) + y(1) + z::Vector{Record2{Int}} [1:3] × 5 each = 2 + 15 = 17
+    @test Symbolics.symstruct_length(Record2{Record2{Int}}) == 17
+
+    @variables rec::Record2{Record2{Int}}
+    @test length(rec) == 17
+
+    # z starts at index 3; z[1] contributes indices 3..7 (5 elements)
+    @test isequal(rec[3], SU.unwrap(rec.z[1].x))     # z[1].x (first scalar field)
+    @test isequal(rec[4], SU.unwrap(rec.z[1].y))     # z[1].y (second scalar field)
+    @test isequal(rec[7], SU.unwrap(rec.z[1].z[3]))  # z[1].z[3] (last element of z[1])
+    # z[2] starts at index 8
+    @test isequal(rec[8], SU.unwrap(rec.z[2].x))
+end
+
+@testset "`diff2term` with SymStruct field access" begin
+    @variables t rec(t)::Record2{Int}
+    D = Differential(t)
+
+    # diff2term(D(rec(t).x)) should equal the .x field of diff2term(D(rec(t)))
+    x_term = SU.unwrap(rec.x)
+    dt_x = Symbolics.diff2term(D(x_term))
+    @test SU.symtype(dt_x) === Int
+
+    rec_term = SU.unwrap(rec)
+    dt_rec = Symbolics.diff2term(D(rec_term))
+    @test isequal(dt_x, SU.unwrap(getproperty(Symbolics.SymStruct{Record2{Int}}(dt_rec), :x)))
+
+    # diff2term(D(rec(t).z[2])) should equal diff2term(D(rec(t))).z[2]
+    z2_term = SU.unwrap(rec.z[2])
+    dt_z2 = Symbolics.diff2term(D(z2_term))
+    @test SU.symtype(dt_z2) === Int
+    z_arr = getproperty(Symbolics.SymStruct{Record2{Int}}(dt_rec), :z)
+    @test isequal(dt_z2, SU.unwrap(z_arr[2]))
+end
