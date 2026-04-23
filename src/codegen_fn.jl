@@ -107,7 +107,7 @@ function codegen_function(
 
     expr = _recursive_unwrap(expr)
 
-    ir, expr = Code.apply_optimization_rules(ir, expr, Code.CSEState(), optimize)
+    ir, expr = Code.apply_optimization_rules(ir, expr, optimize)
 
     i = findfirst(x -> x isa DestructuredArgs, args)
     if similarto === nothing
