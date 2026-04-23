@@ -104,3 +104,37 @@ end
 @register_discontinuity <=(x, y) y - x false true
 @register_discontinuity >(x, y) y - x true false
 @register_discontinuity >=(x, y) x - y false true
+
+"""
+    majorization_function(f)
+
+Given a function `f`, return a majorization function `m` for `f`. The function `m` should
+have the signature `m(k, args...)` where `args...` are the same arguments as `f`. `k` is a
+`Real` value which acts as an approximation factor. For higher `k`, the function `m` should
+more closely approximate `f` over the domain. A majorization function is such that
+`m(k, args...) >= f(args...)` for all `args...` in the domain.
+"""
+function majorization_function end
+
+"""
+    minorization_function(f)
+
+Given a function `f`, return a minorization function `m` for `f`. The function `m` should
+have the signature `m(k, args...)` where `args...` are the same arguments as `f`. `k` is a
+`Real` value which acts as an approximation factor. For higher `k`, the function `m` should
+more closely approximate `f` over the domain. A minorization function is such that
+`m(k, args...) <= f(args...)` for all `args...` in the domain.
+"""
+function minorization_function end
+
+"""
+    approximation_function(f)
+
+Given a function `f`, return an approximation function `appr` for `f`. The function `appr` should
+have the signature `appr(k, args...)` where `args..` are the same arguments as `f`. `k` is a
+`Real` value acting as an approximation factor. For higher `k`, the function `appr` should more
+closely approximate `f` over the domain. The function `appr` offers no guarantees other than
+infinite differentiability over the domain. At any point in the domain, it may evaluate to a
+value greater or less than the value returned by `f` for the same point.
+"""
+function approximation_function end
