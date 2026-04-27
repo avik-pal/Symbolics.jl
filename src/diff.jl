@@ -227,6 +227,7 @@ function _recursive_hasoperator(::Type{op}, O::SymbolicT) where {op}
             end
             recursive_hasoperator(op, expr)
         end
+        BSImpl.ArrayMaker(; values) => any(_recursive_hasoperator(op), values)
     end
 end
 _recursive_hasoperator(::Type{op}, O) where {op} = false
