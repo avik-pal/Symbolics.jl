@@ -5,6 +5,9 @@ on:
       - master
     paths-ignore:
       - 'docs/**'
+permissions:
+  pull-requests: write    # needed to post comments
+
 
 jobs:
   benchmark:
@@ -20,4 +23,3 @@ jobs:
           julia-version: '1'
           rev: '${{ github.event.pull_request.base.sha }},${{ github.sha }}'
           bench-on: '${{ github.sha }}'
-          job-summary: 'true'
