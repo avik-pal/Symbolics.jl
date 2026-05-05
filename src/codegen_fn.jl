@@ -97,7 +97,7 @@ function codegen_function(
         ir::IRStructure{VartypeT}, expr::AbstractArray, args::Vector;
         similarto = nothing, nanmath::Bool = true, wrap_code::Tuple = (identity, identity),
         iip_config::NTuple{2, Bool} = (true, true), outputidxs = nothing,
-        skipzeros = false, checkbounds = false, kwargs...
+        skipzeros = false, checkbounds = false, optimize = nothing, kwargs...
     )
     args = canonicalize_args(args, !checkbounds)
     rewrites = Dict()
@@ -106,6 +106,8 @@ function codegen_function(
     end
 
     expr = _recursive_unwrap(expr)
+
+    ir, expr = Code.apply_optimization_rules(ir, expr, optimize)
 
     i = findfirst(x -> x isa DestructuredArgs, args)
     if similarto === nothing
