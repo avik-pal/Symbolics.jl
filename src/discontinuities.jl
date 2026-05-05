@@ -104,3 +104,93 @@ end
 @register_discontinuity <=(x, y) y - x false true
 @register_discontinuity >(x, y) y - x true false
 @register_discontinuity >=(x, y) x - y false true
+
+"""
+    majorization_function(f)
+
+Given a function `f`, return a majorization function `m` for `f`. The function `m` should
+have the signature `m(k, args...)` where `args...` are the same arguments as `f`. `k` is a
+`Real` value which acts as an approximation factor. For higher `k`, the function `m` should
+more closely approximate `f` over the domain. A majorization function is such that
+`m(k, args...) >= f(args...)` for all `args...` in the domain.
+"""
+function majorization_function end
+
+"""
+    minorization_function(f)
+
+Given a function `f`, return a minorization function `m` for `f`. The function `m` should
+have the signature `m(k, args...)` where `args...` are the same arguments as `f`. `k` is a
+`Real` value which acts as an approximation factor. For higher `k`, the function `m` should
+more closely approximate `f` over the domain. A minorization function is such that
+`m(k, args...) <= f(args...)` for all `args...` in the domain.
+"""
+function minorization_function end
+
+"""
+    approximation_function(f)
+
+Given a function `f`, return an approximation function `appr` for `f`. The function `appr` should
+have the signature `appr(k, args...)` where `args..` are the same arguments as `f`. `k` is a
+`Real` value acting as an approximation factor. For higher `k`, the function `appr` should more
+closely approximate `f` over the domain. The function `appr` offers no guarantees other than
+infinite differentiability over the domain. At any point in the domain, it may evaluate to a
+value greater or less than the value returned by `f` for the same point.
+"""
+function approximation_function end
+
+function _logsumexp(m, a, b)
+    a > b ? (a + log1p(exp(m * (b - a))) / m) : (b + log1p(exp(m * (a - b))) / m)
+end
+
+function _approx_min(m, a, b)
+    -_logsumexp(m, -a, -b)
+end
+
+function _approx_abs(m, a)
+    a + log1p(exp(-2m * x)) / m
+end
+
+function _approx_ge(m, a, b)
+    (tanh(m * (a - b)) + 1) / 2
+end
+
+_approx_le(m, a, b) = _approx_ge(m, b, a)
+
+function _sigmoid(x)
+    if x > 0
+        return one(x) / (one(x) + exp(-x))
+    else
+        tmp = exp(x)
+        return tmp / (1 + tmp)
+    end
+end
+
+function _sigder(x)
+    tmp = _sigmoid(x)
+    return tmp * (1 - tmp)
+end
+
+function _approx_eq(m, a, b)
+    # `5m` to try and make `_approx_eq` similarly steep for the same `m` as other
+    # approximators.
+    4_sigder(5m * (a - b))
+end
+
+approximation_function(::typeof(max)) = _logsumexp
+majorization_function(::typeof(max)) = _logsumexp
+approximation_function(::typeof(min)) = _approx_min
+minorization_function(::typeof(min)) = _approx_min
+approximation_function(::typeof(NaNMath.max)) = _logsumexp
+majorization_function(::typeof(NaNMath.max)) = _logsumexp
+approximation_function(::typeof(NaNMath.min)) = _approx_min
+minorization_function(::typeof(NaNMath.min)) = _approx_min
+approximation_function(::typeof(abs)) = _approx_abs
+majorization_function(::typeof(abs)) = _approx_abs
+
+approximation_function(::typeof(>=)) = _approx_ge
+approximation_function(::typeof(>)) = _approx_ge
+approximation_function(::typeof(<=)) = _approx_le
+approximation_function(::typeof(<)) = _approx_le
+
+approximation_function(::typeof(==)) = _approx_eq

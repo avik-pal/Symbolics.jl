@@ -706,3 +706,23 @@ end
         @test isequal(Symbolics.derivative(norm(y), y[i, j]), Symbolics.derivative(norm(collect(y)), y[i, j]))
     end
 end
+
+# `recursive_hasoperator` on `ArrayMaker` (issue: was not handled, always returned false)
+@testset "`recursive_hasoperator` with `ArrayMaker`" begin
+    @variables t x(t)[1:2]
+    D = Differential(t)
+
+    arr_with_deriv = @makearray arr[1:2] begin
+        arr[1:1] => Symbolics.SConst([unwrap(D(x[1]))])
+        arr[2:2] => [unwrap(x[2])]
+    end
+    @test SymbolicUtils.isarraymaker(arr_with_deriv)
+    @test Symbolics.hasderiv(arr_with_deriv)
+
+    arr_no_deriv = @makearray arr[1:2] begin
+        arr[1:1] => Symbolics.SConst([unwrap(x[1])])
+        arr[2:2] => [unwrap(x[2])]
+    end
+    @test SymbolicUtils.isarraymaker(arr_no_deriv)
+    @test !Symbolics.hasderiv(arr_no_deriv)
+end
