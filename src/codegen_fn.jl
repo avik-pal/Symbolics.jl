@@ -40,13 +40,15 @@ end
 function codegen_function(
         ir::IRStructure{VartypeT}, expr, args::Vector;
         nanmath::Bool = true, wrap_code::Tuple = (identity, identity),
-        checkbounds = false, iip_config::NTuple{2, Bool} = (true, true), kwargs...
+        checkbounds = false, iip_config::NTuple{2, Bool} = (true, true), sort_addmul = false,
+        kwargs...
     )
     args = canonicalize_args(args, !checkbounds)
     rewrites = Dict()
     if nanmath
         rewrites[:nanmath] = true
     end
+    rewrites[:sort_addmul] = sort_addmul
 
     if iip_config[1]
         oopfn = wrap_code[1](Func(args, [], expr))
@@ -97,13 +99,14 @@ function codegen_function(
         ir::IRStructure{VartypeT}, expr::AbstractArray, args::Vector;
         similarto = nothing, nanmath::Bool = true, wrap_code::Tuple = (identity, identity),
         iip_config::NTuple{2, Bool} = (true, true), outputidxs = nothing,
-        skipzeros = false, checkbounds = false, optimize = nothing, kwargs...
+        skipzeros = false, checkbounds = false, optimize = nothing, sort_addmul = false, kwargs...
     )
     args = canonicalize_args(args, !checkbounds)
     rewrites = Dict()
     if nanmath
         rewrites[:nanmath] = true
     end
+    rewrites[:sort_addmul] = sort_addmul
 
     expr = _recursive_unwrap(expr)
 
