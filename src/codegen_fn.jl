@@ -1,13 +1,21 @@
-const DEFAULT_IIP = :(
-    function (args...)
-        error("The in-place version for this function is invalid")
+struct FunctionUnimplementedError <: Exception
+    type::String
+end
+
+function Base.showerror(io::IO, err::FunctionUnimplementedError)
+    print(io, "The $(err.type) version for this function is invalid")
+end
+
+function get_unimplemented_fn(nargs, type)
+    expr = :(function unimplemented()
+        throw($FunctionUnimplementedError($type))
+     end)
+
+    for i in 1:nargs
+        push!(expr.args[1].args, Symbol(:x, i))
     end
-)
-const DEFAULT_OOP = :(
-    function (args...)
-        error("The out-place version for this function is invalid")
-    end
-)
+    return expr
+end
 
 const IIP_OUTSYM = only(@syms $DEFAULT_OUTSYM::Any)
 const IIP_ALLOCATOR = SU.Term{VartypeT}(
@@ -30,15 +38,17 @@ function canonicalize_args(args::Vector, inbounds::Bool)
 end
 
 function codegen_function(
-        ir::IRStructure{VartypeT}, expr::SymbolicT, args::Vector;
+        ir::IRStructure{VartypeT}, expr, args::Vector;
         nanmath::Bool = true, wrap_code::Tuple = (identity, identity),
-        checkbounds = false, iip_config::NTuple{2, Bool} = (true, true), kwargs...
+        checkbounds = false, iip_config::NTuple{2, Bool} = (true, true), sort_addmul = false,
+        kwargs...
     )
     args = canonicalize_args(args, !checkbounds)
     rewrites = Dict()
     if nanmath
         rewrites[:nanmath] = true
     end
+    rewrites[:sort_addmul] = sort_addmul
 
     if iip_config[1]
         oopfn = wrap_code[1](Func(args, [], expr))
@@ -51,9 +61,10 @@ function codegen_function(
             )
         end
     else
-        oop = DEFAULT_OOP
+        oop = get_unimplemented_fn(length(args), "out-of-place")
     end
     if iip_config[2] && SU.is_array_shape(SU.shape(expr))
+        expr = SConst(expr)
         iipexpr = if Code.supports_with_allocator(expr)
             Code.with_allocator(IIP_ALLOCATOR, expr)
         else
@@ -72,7 +83,7 @@ function codegen_function(
             )
         end
     else
-        iip = DEFAULT_IIP
+        iip = get_unimplemented_fn(length(args) + 1, "in-place")
     end
     return oop, iip
 end
@@ -88,15 +99,18 @@ function codegen_function(
         ir::IRStructure{VartypeT}, expr::AbstractArray, args::Vector;
         similarto = nothing, nanmath::Bool = true, wrap_code::Tuple = (identity, identity),
         iip_config::NTuple{2, Bool} = (true, true), outputidxs = nothing,
-        skipzeros = false, checkbounds = false, kwargs...
+        skipzeros = false, checkbounds = false, optimize = nothing, sort_addmul = false, kwargs...
     )
     args = canonicalize_args(args, !checkbounds)
     rewrites = Dict()
     if nanmath
         rewrites[:nanmath] = true
     end
+    rewrites[:sort_addmul] = sort_addmul
 
     expr = _recursive_unwrap(expr)
+
+    ir, expr = Code.apply_optimization_rules(ir, expr, optimize)
 
     i = findfirst(x -> x isa DestructuredArgs, args)
     if similarto === nothing
@@ -113,7 +127,7 @@ function codegen_function(
             )
         end
     else
-        oop = DEFAULT_OOP
+        oop = get_unimplemented_fn(length(args), "out-of-place")
     end
 
     if iip_config[2]
@@ -139,7 +153,7 @@ function codegen_function(
             )
         end
     else
-        iip = DEFAULT_IIP
+        iip = get_unimplemented_fn(length(args) + 1, "in-place")
     end
     return oop, iip
 end

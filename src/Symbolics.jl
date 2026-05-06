@@ -582,6 +582,8 @@ function __init__()
     end
     SymbolicUtils.hashcons(RootsOf, true)
     SymbolicUtils.hashcons(IM, true)
+    SymbolicUtils.hashcons(COMMON_ONE, true)
+    SymbolicUtils.hashcons(COMMON_ZERO, true)
     SymbolicUtils.hashcons(IIP_OUTSYM, true)
     SymbolicUtils.hashcons(IIP_ALLOCATOR, true)
 end
@@ -591,6 +593,8 @@ include("inverse.jl")
 
 export rootfunction, left_continuous_function, right_continuous_function, @register_discontinuity
 include("discontinuities.jl")
+
+include("despecialize.jl")
 
 @public Arr, NAMESPACE_SEPARATOR, Unknown, VariableDefaultValue, VariableSource
 @public _parse_vars, derivative, gradient, jacobian, sparsejacobian, hessian, sparsehessian
